@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@media print {
+  /* Hide everything by default */
+  body * {
+    display: none;
+  }
+
+  /* Only show the printable card */
+  .printable-card {
+    display: block !important;
+  }
+
+  /* Ensure the print card uses full width on print */
+  .printable-card {
+    width: 100%;
+  }
+}
