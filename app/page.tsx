@@ -11,11 +11,33 @@ import {
   Chip,
   Kbd,
   CardFooter,
+  ButtonGroup,
 } from "@nextui-org/react";
 import axios from "axios";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import { SearchIcon, Download } from "@/components/icons";
+
+interface HazardInfo {
+  url: string;
+  description: string;
+}
+
+interface FirstAidMeasure {
+  type: string;
+  instruction: string;
+}
+
+interface GHSInfo {
+  signalWord: string | null;
+  hazardStatements: string[];
+}
+
+interface TopLevelInfo {
+  recordType: string;
+  recordNumber: number;
+  recordTitle: string;
+}
 
 interface CompoundData {
   IUPACName: string;
@@ -24,24 +46,31 @@ interface CompoundData {
   CanonicalSMILES: string;
   commonName?: string;
   casNumber?: string;
-  hazardInformation?: Array<{ url: string; description: string }>;
+  hazardInformation?: HazardInfo[];
   hazardsSummary?: string;
-  firstAidMeasures?: Array<{ type: string; instruction: string }>;
-  ghsInfo?: { signalWord: string | null; hazardStatements: string[] };
-  topLevelInfo?: {
-    recordType: string;
-    recordNumber: number;
-    recordTitle: string;
-  };
+  firstAidMeasures?: FirstAidMeasure[];
+  ghsInfo?: GHSInfo;
+  topLevelInfo?: TopLevelInfo;
   physicalDangers?: string[];
+}
+
+type FieldKeys = "manufacturer" | "address" | "mfg" | "size" | "note";
+
+interface Fields {
+  manufacturer: string;
+  address: string;
+  mfg: string;
+  size: string;
+  note: string;
 }
 
 export default function DocsPage() {
   const [cid, setCid] = useState<string>("");
   const [compoundData, setCompoundData] = useState<CompoundData | null>(null);
   const [error, setError] = useState<string>("");
+  const [loading, setLoading] = useState<boolean>(false); // Track loading state
 
-  const [fields, setFields] = useState({
+  const [fields, setFields] = useState<Fields>({
     manufacturer: "-",
     address: "-",
     mfg: "-/-/-",
@@ -49,7 +78,7 @@ export default function DocsPage() {
     note: "-",
   });
 
-  const [editing, setEditing] = useState({
+  const [editing, setEditing] = useState<Record<FieldKeys, boolean>>({
     manufacturer: false,
     address: false,
     mfg: false,
@@ -57,28 +86,31 @@ export default function DocsPage() {
     note: false,
   });
 
-  const handleToggleEdit = (field) => {
+  const handleToggleEdit = (field: FieldKeys) => {
     setEditing((prev) => ({ ...prev, [field]: !prev[field] }));
   };
 
-  const handleChange = (field, value) => {
+  const handleChange = (field: FieldKeys, value: string) => {
     setFields((prev) => ({ ...prev, [field]: value }));
   };
 
   const fetchCompoundData = async () => {
     try {
       setError("");
+      setLoading(true); // Start loading
       const response = await axios.get(`/api/pubchem?cid=${cid}`);
       setCompoundData(response.data);
-      console.log("Compound Data:", response.data);
     } catch (err) {
       setError("Failed to fetch data. Please try again.");
+    } finally {
+      setLoading(false); // Stop loading
     }
   };
 
   const exportToPdf = async () => {
     const cardElement = document.querySelector(".printable-card");
-    if (!cardElement) return;
+
+    if (!(cardElement instanceof HTMLElement)) return;
 
     const images = document.querySelectorAll("img");
     await Promise.all(
@@ -95,23 +127,106 @@ export default function DocsPage() {
       scale: 3,
       useCORS: true,
     });
+
     const imgData = canvas.toDataURL("image/png");
     const pdf = new jsPDF("p", "mm", "a4");
     const pdfWidth = pdf.internal.pageSize.getWidth();
     const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
 
-    pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
+    // Define padding
+    const padding = 5;
 
-    // Replace hardcoded filename with dynamic value
+    pdf.addImage(
+      imgData,
+      "PNG",
+      padding,
+      padding,
+      pdfWidth - padding * 2,
+      pdfHeight - padding * 2
+    );
+
     const fileName = compoundData?.topLevelInfo?.recordTitle
       ? `${compoundData.topLevelInfo.recordTitle}.pdf`
-      : "default-filename.pdf"; // Fallback filename in case of missing data
+      : "default-filename.pdf";
 
     pdf.save(fileName);
   };
 
+  const exportToJpg = async () => {
+    const cardElement = document.querySelector(
+      ".printable-card"
+    ) as HTMLElement | null;
+    if (!cardElement) return;
+
+    // Wait for images to load
+    const images = document.querySelectorAll("img");
+    await Promise.all(
+      Array.from(images).map(
+        (img) =>
+          new Promise<void>((resolve) => {
+            if (img.complete) resolve();
+            else img.onload = () => resolve();
+          })
+      )
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 100)); // Short delay
+
+    const canvas = await html2canvas(cardElement, {
+      scale: 4,
+      useCORS: true,
+      backgroundColor: null, // Keep it transparent so we can see padded bg
+    });
+
+    const padding = 30;
+    const paddedCanvas = document.createElement("canvas");
+    const ctx = paddedCanvas.getContext("2d");
+    paddedCanvas.width = canvas.width + padding * 2;
+    paddedCanvas.height = canvas.height + padding * 2;
+
+    if (ctx) {
+      // Fill the padded area with a contrasting background (light gray)
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, paddedCanvas.width, paddedCanvas.height);
+      // Draw the captured canvas offset by the padding
+      ctx.drawImage(canvas, padding, padding);
+    }
+
+    const imgData = paddedCanvas.toDataURL("image/jpeg", 1.0);
+
+    // For demonstration, let's just call it "padded-image.jpg"
+    const fileName = compoundData?.topLevelInfo?.recordTitle
+      ? `${compoundData.topLevelInfo.recordTitle}.jpg`
+      : "default-filename.jpg";
+
+    const link = document.createElement("a");
+    link.href = imgData;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    // After downloading, open the image. You should see:
+    // - A gray area (the padded region)
+    // - Your `.printable-card` content inset by 30px
+    // - If `.printable-card` has a border, you’ll see it clearly separated from the gray background.
+  };
+
+  // Define a function that maps signalWords to valid Chip colors
+  function getChipColor(
+    signalWord: string | null
+  ): "default" | "primary" | "secondary" | "success" | "warning" | "danger" {
+    if (!signalWord) return "default";
+
+    const lower = signalWord.toLowerCase();
+    if (lower === "warning") return "warning";
+    if (lower === "danger") return "danger";
+
+    return "default"; // fallback if none match
+  }
+
   return (
-    <div className="container  ">
+    <div className="container">
       <div className="grid grid-cols-4 gap-4">
         <div className="col-span-4">
           <p className="text-xl text-center font-bold">
@@ -152,10 +267,47 @@ export default function DocsPage() {
         </div>
       </div>
 
+      {/* Show loading indicator if data is being fetched */}
+      {loading && (
+        <div className="my-4 text-center">
+          <p className="text-sm">Loading...</p>
+        </div>
+      )}
+
+      {/* Only show the buttons after compoundData is fetched and not loading */}
+      {compoundData && !loading && (
+        <div className="col-span-4 mt-8">
+          <ButtonGroup size="sm">
+            <Button
+              fullWidth
+              onPress={exportToPdf}
+              endContent={
+                <Download className="text-base text-default-400 pointer-events-none flex-shrink-0" />
+              }
+            >
+              Save PDF
+            </Button>
+
+            <Button
+              fullWidth
+              onPress={exportToJpg}
+              endContent={
+                <Download className="text-base text-default-400 pointer-events-none flex-shrink-0" />
+              }
+            >
+              Save JPG
+            </Button>
+          </ButtonGroup>
+        </div>
+      )}
+
       <div>
         {compoundData && (
           <>
-            <Card className="printable-card  mt-8 mb-4">
+            <Card
+              className="printable-card mt-4 mb-4"
+              style={{ border: "1px solid rgb(228 228 231)" }}
+            >
               <CardHeader className="grid grid-cols-3 gap-3">
                 <div className="col-span-2 flex gap-3 items-center">
                   <div className="col-start-1 col-end-3">
@@ -168,7 +320,7 @@ export default function DocsPage() {
                 </div>
                 <div className="col-start-4 col-end-4">
                   {compoundData.ghsInfo?.signalWord && (
-                    <Chip color={compoundData.ghsInfo.signalWord.toLowerCase()}>
+                    <Chip color={getChipColor(compoundData.ghsInfo.signalWord)}>
                       <p className="text-md font-bold text-left text-white">
                         {compoundData.ghsInfo.signalWord}
                       </p>
@@ -178,8 +330,8 @@ export default function DocsPage() {
               </CardHeader>
               <Divider />
               <CardBody>
-                <div className="grid grid-cols-4 gap-4 ">
-                  <div className="col-span-3 h-96">
+                <div className="grid grid-cols-4 gap-4">
+                  <div className="col-span-3">
                     <p className="text-sm">
                       <strong>IUPAC:</strong> {compoundData.IUPACName}
                     </p>
@@ -209,11 +361,9 @@ export default function DocsPage() {
                     </p>
 
                     {compoundData.hazardsSummary && (
-                      <>
-                        <p className="mt-4 text-xs">
-                          {compoundData.hazardsSummary}
-                        </p>
-                      </>
+                      <p className="mt-4 text-xs">
+                        {compoundData.hazardsSummary}
+                      </p>
                     )}
                   </div>
                   <div className="col-span-1">
@@ -224,19 +374,21 @@ export default function DocsPage() {
                             ? "manufacturer"
                             : key.charAt(0).toUpperCase() + key.slice(1)}
                         </strong>
-                        {editing[key] ? (
+                        {editing[key as FieldKeys] ? (
                           <input
                             type="text"
                             value={value}
                             className="text-xs border border-gray-300 rounded p-1 w-full"
-                            onChange={(e) => handleChange(key, e.target.value)}
-                            onBlur={() => handleToggleEdit(key)} // End editing when losing focus
+                            onChange={(e) =>
+                              handleChange(key as FieldKeys, e.target.value)
+                            }
+                            onBlur={() => handleToggleEdit(key as FieldKeys)}
                             autoFocus
                           />
                         ) : (
                           <p
-                            className="text-xs cursor-pointer text-xs"
-                            onClick={() => handleToggleEdit(key)}
+                            className="text-xs cursor-pointer"
+                            onClick={() => handleToggleEdit(key as FieldKeys)}
                           >
                             {value}
                           </p>
@@ -248,7 +400,7 @@ export default function DocsPage() {
                     {compoundData.physicalDangers &&
                       compoundData.physicalDangers.length > 0 && (
                         <>
-                          <p className=" text-sm">
+                          <p className="text-sm">
                             <strong>Physical Dangers:</strong>
                           </p>
                           <ul className="text-xs">
@@ -295,40 +447,29 @@ export default function DocsPage() {
                 </div>
               </CardBody>
               <Divider />
-              <CardFooter>
-                <Button
-                  fullWidth
-                  size="sm"
-                  onPress={exportToPdf}
-                  endContent={
-                    <Download className="text-base text-default-400 pointer-events-none flex-shrink-0" />
-                  }
-                >
-                  Export to PDF
-                </Button>
-              </CardFooter>
             </Card>
 
-            {compoundData.ghsInfo?.hazardStatements.length > 0 && (
-              <Card className="max-w-[600px] mb-4">
-                <CardHeader>
-                  <p className="text-sm">
-                    <strong>GHS Hazard Statements - </strong>
-                    {compoundData.topLevelInfo?.recordTitle}
-                  </p>
-                </CardHeader>
-                <Divider />
-                <CardBody>
-                  <ul className="text-xs">
-                    {compoundData.ghsInfo.hazardStatements.map(
-                      (statement, index) => (
-                        <li key={index}>{statement}</li>
-                      )
-                    )}
-                  </ul>
-                </CardBody>
-              </Card>
-            )}
+            {compoundData.ghsInfo?.hazardStatements &&
+              compoundData.ghsInfo.hazardStatements.length > 0 && (
+                <Card className="max-w-[600px] mb-4">
+                  <CardHeader>
+                    <p className="text-sm">
+                      <strong>GHS Hazard Statements - </strong>
+                      {compoundData.topLevelInfo?.recordTitle}
+                    </p>
+                  </CardHeader>
+                  <Divider />
+                  <CardBody>
+                    <ul className="text-xs">
+                      {compoundData.ghsInfo.hazardStatements.map(
+                        (statement, index) => (
+                          <li key={index}>{statement}</li>
+                        )
+                      )}
+                    </ul>
+                  </CardBody>
+                </Card>
+              )}
 
             {compoundData.firstAidMeasures &&
               compoundData.firstAidMeasures.length > 0 && (
